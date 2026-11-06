@@ -1,0 +1,7 @@
+﻿node_modules/
+web-ext-artifacts/
+.DS_Store
+Thumbs.db
+AGENTS.md
+CLAUDE.md
+.opencode/

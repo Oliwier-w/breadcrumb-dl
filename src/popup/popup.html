@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <title>BreadcrumbDL · Download vault</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+    <header>
+        <div class="toolbar">
+            <h1>Breadcrumb<span>DL</span></h1>
+            <div class="export-actions">
+                <label class="sr-only" for="export-format">Export format</label>
+                <select id="export-format">
+                    <option value="json">JSON</option>
+                    <option value="md">Markdown</option>
+                </select>
+                <button id="export" type="button" title="Export all records" disabled>Export all</button>
+            </div>
+        </div>
+        <label class="sr-only" for="search">Search download provenance</label>
+        <input id="search" type="search" placeholder="Search names, context, notes, #tags…"
+            autocomplete="off" spellcheck="false" autofocus aria-controls="vault">
+        <div class="search-meta">
+            <span id="count" role="status" aria-live="polite">Loading records…</span>
+            <span><kbd>↓</kbd> browse · <kbd>/</kbd> search</span>
+        </div>
+    </header>
+    <main>
+        <ul id="vault" aria-label="Download records"></ul>
+        <p id="empty" hidden></p>
+    </main>
+    <footer>
+        <span id="status" role="status" aria-live="polite">Your download trail, stored locally.</span>
+        <span><kbd>Esc</kbd> clear / cancel</span>
+    </footer>
+    <script src="popup.js" type="module"></script>
+</body>
+</html>

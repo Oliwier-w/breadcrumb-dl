@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "BreadcrumbDL",
+  "version": "0.1.0",
+  "description": "Alt+Shift+Click any link to download it with a smart, context-rich filename.",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "breadcrumbdl@indie.local",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["none"]
+      }
+    }
+  },
+  "permissions": ["downloads", "storage", "menus", "activeTab"],
+  "host_permissions": ["<all_urls>"],
+  "incognito": "not_allowed",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+  },
+  "background": {
+    "scripts": ["src/background/index.js"],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["src/content/index.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "BreadcrumbDL",
+    "default_popup": "src/popup/popup.html",
+    "default_icon": "assets/icon.svg"
+  },
+  "icons": {
+    "128": "assets/icon.svg"
+  },
+  "commands": {
+    "_execute_action": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y"
+      },
+      "description": "Open the BreadcrumbDL vault"
+    },
+    "quick-note": {
+      "suggested_key": {
+        "default": "Alt+N"
+      },
+      "description": "Add a note to the pending BreadcrumbDL download"
+    }
+  }
+}
