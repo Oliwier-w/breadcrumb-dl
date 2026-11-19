@@ -2,6 +2,9 @@ import { buildSmartFilename, cleanSnippet } from '../shared/sanitize.js';
 
 const VAULT_KEY = 'vault_records';
 const SEARCH_FIELDS = ['filename', 'userNote', 'containerText', 'nearestHeading', 'selectedText', 'pageUrl'];
+const DOWNLOAD_LABELS = new Map([
+    ['in_progress', 'In progress'], ['complete', 'Complete'], ['interrupted', 'Interrupted'],
+]);
 const search = document.getElementById('search');
 const list = document.getElementById('vault');
 const empty = document.getElementById('empty');
@@ -11,6 +14,7 @@ const exportButton = document.getElementById('export');
 const exportFormat = document.getElementById('export-format');
 let records = [];
 let indexed = [];
+let exporting = false;
 const drafts = new Map();
 
 const text = (value) => typeof value === 'string' ? value : '';
@@ -186,7 +190,7 @@ function renderCard(record, tokens) {
         time.dateTime = date.toISOString();
         time.title = date.toLocaleString();
     }
-    metadata.append(time);
+    metadata.append(time, node('span', '', DOWNLOAD_LABELS.get(record.state) ?? 'Status unknown'));
     item.append(metadata);
     const context = text(record.containerText) || text(record.selectedText) || text(record.nearestHeading);
     item.append(highlightedSnippet(cleanSnippet(context, 480) || context.slice(0, 480) || 'No context captured.', tokens));
@@ -206,7 +210,7 @@ function render() {
     empty.textContent = records.length ? 'No matching downloads. Try fewer words.'
         : 'No downloads yet. Alt+Shift+Click a link to start your trail.';
     count.textContent = `${matches.length} / ${records.length} records`;
-    exportButton.disabled = !records.length;
+    exportButton.disabled = exporting || !records.length;
 }
 
 async function load() {
@@ -230,6 +234,7 @@ function markdown(vault) {
         const fields = [
             ['ID', record.id], ['Download ID', Number.isInteger(record.downloadId) ? String(record.downloadId) : ''],
             ['Downloaded', Number.isFinite(date.getTime()) ? date.toISOString() : ''],
+            ['Status', DOWNLOAD_LABELS.get(record.state) ?? 'Unknown'],
             ['URL', record.url], ['Referrer', record.referrer], ['Source', record.pageUrl],
             ['Page title', record.pageTitle], ['Heading', record.nearestHeading],
             ['Link text', record.linkText], ['Context', record.containerText],
@@ -241,7 +246,29 @@ function markdown(vault) {
     }).join('\n\n---\n\n') + '\n';
 }
 
+async function waitForExport(id) {
+    const changes = browser.downloads.onChanged;
+    let listener;
+    try {
+        const finished = new Promise((resolve) => {
+            listener = (delta) => {
+                const state = delta.state?.current;
+                if (delta.id === id && (state === 'complete' || state === 'interrupted')) resolve(state);
+            };
+            changes.addListener(listener);
+        });
+        const [download] = await browser.downloads.search({ id });
+        if (download?.state === 'complete' || download?.state === 'interrupted') return download.state;
+        if (!download) throw new Error('The export download is no longer available.');
+        return await finished;
+    } finally {
+        if (listener) changes.removeListener(listener);
+    }
+}
+
 exportButton.addEventListener('click', async () => {
+    if (exporting) return;
+    exporting = true;
     exportButton.disabled = true;
     let url;
     try {
@@ -256,13 +283,16 @@ exportButton.addEventListener('click', async () => {
         url = URL.createObjectURL(new Blob([content], {
             type: format === 'md' ? 'text/markdown;charset=utf-8' : 'application/json',
         }));
-        await browser.downloads.download({
+        status.textContent = 'Saving export…';
+        const id = await browser.downloads.download({
             url, filename: `breadcrumbdl-${new Date().toISOString().slice(0, 10)}.${format}`, saveAs: true,
         });
+        if (await waitForExport(id) !== 'complete') throw new Error('The download was interrupted.');
         status.textContent = `Exported ${vault.length} records as ${format.toUpperCase()}.`;
     } catch (error) { status.textContent = `Export failed: ${error.message}`; }
     finally {
         if (url) URL.revokeObjectURL(url);
+        exporting = false;
         exportButton.disabled = !records.length;
     }
 });

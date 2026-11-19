@@ -278,11 +278,18 @@
             closeToast();
         });
         (document.body ?? document.documentElement).append(ui.host);
-        browser.runtime.sendMessage({ type: 'preview', context, documentToken }).then((response) => {
-            if (active === state && typeof response?.filename === 'string') {
-                ui.name.textContent = displayFilename(response.filename);
+        const previewUnavailable = () => {
+            if (active === state) ui.name.textContent = 'Filename preview unavailable';
+        };
+        (async () => {
+            try {
+                const response = await browser.runtime.sendMessage({ type: 'preview', context, documentToken });
+                if (!response?.filename) return previewUnavailable();
+                if (active === state) ui.name.textContent = displayFilename(response.filename);
+            } catch {
+                previewUnavailable();
             }
-        }).catch(() => {});
+        })();
     }
 
     window.addEventListener('keydown', (event) => {
@@ -321,16 +328,17 @@
     document.addEventListener('click', (event) => {
         if (!event.isTrusted || event.button !== 0) return;
         const now = Date.now();
-        if (now - lastClickAt < REMEMBER_THROTTLE_MS) return;
+        const smartGesture = event.altKey && event.shiftKey;
+        if (!smartGesture && now - lastClickAt < REMEMBER_THROTTLE_MS) return;
         const actionable = actionableFor(event, 'a[href], button');
         if (!actionable) return;
-        lastClickAt = now;
-        if (event.altKey && event.shiftKey) {
+        if (smartGesture) {
             if (!actionable.matches('a[href]') || !/^(https?|ftp):/i.test(actionable.href)) return;
             event.preventDefault();
             event.stopPropagation();
             openToast(extractClickContext(actionable));
         } else {
+            lastClickAt = now;
             remember(extractClickContext(actionable));
         }
     }, true);

@@ -6,6 +6,8 @@ const MAX_AGE = 120_000;
 const MAX_CLICKS = 100;
 const MENU_ID = 'breadcrumb-smart-download';
 const NOTE_PROMPTS = 'note_prompts';
+const NOTE_MAX_AGE = 1_800_000;
+const DOWNLOAD_STATES = ['in_progress', 'complete', 'interrupted'];
 const text = (value) => typeof value === 'string' ? value : '';
 
 // Web Locks serialize storage read/modify/write operations without an in-memory queue.
@@ -58,7 +60,7 @@ function cleanContext(raw = {}) {
     ].map((key) => [key, text(raw?.[key]).slice(0, 8000)]));
 }
 
-async function cacheClick(raw, tabId, note = '', documentToken = '') {
+async function cacheClick(raw, tabId, documentToken) {
     const context = cleanContext(raw);
     const targetUrl = normalizeUrl(context.href || context.pageUrl);
     if (!Number.isInteger(tabId) || !targetUrl) return null;
@@ -68,7 +70,7 @@ async function cacheClick(raw, tabId, note = '', documentToken = '') {
         .filter((click) => now - click.timestamp < MAX_AGE);
     const click = {
         key: `${tabId}:${targetUrl}`, tabId, targetUrl, context,
-        timestamp: now, userNote: text(note).slice(0, 8000), documentToken: text(documentToken),
+        timestamp: now, documentToken: text(documentToken),
     };
     clicks.push(click);
     await browser.storage.session.set({ [CACHE_KEY]: clicks.slice(-MAX_CLICKS) });
@@ -90,13 +92,18 @@ async function activeTab() {
 
 async function matchClick(item) {
     const clicks = await recentClicks();
-    const tabId = Number.isInteger(item.tabId) && item.tabId >= 0
-        ? item.tabId : (await activeTab())?.id;
-    const scoped = clicks.filter((click) => click.tabId === tabId);
+    const tabId = Number.isInteger(item.tabId) && item.tabId >= 0 ? item.tabId : null;
     const urls = [item.url, item.finalUrl].map(normalizeUrl).filter(Boolean);
+    const referrer = normalizeUrl(item.referrer);
+    if (tabId === null) {
+        if (!referrer) return null;
+        const matches = clicks.filter((click) => urls.includes(click.targetUrl)
+            && normalizeUrl(click.context.pageUrl) === referrer);
+        return matches.length === 1 ? matches[0] : null;
+    }
+    const scoped = clicks.filter((click) => click.tabId === tabId);
     const exact = scoped.find((click) => urls.includes(click.targetUrl));
     if (exact) return exact;
-    const referrer = normalizeUrl(item.referrer);
     if (referrer) {
         const match = scoped.find((click) =>
             normalizeUrl(click.context.pageUrl) === referrer || click.targetUrl === referrer);
@@ -136,10 +143,14 @@ async function promptNote(origin, record) {
     if (!Number.isInteger(tabId) || !documentToken || origin.notification === false) return '';
     const stored = await browser.storage.session.get(NOTE_PROMPTS);
     const prompts = (Array.isArray(stored[NOTE_PROMPTS]) ? stored[NOTE_PROMPTS] : [])
-        .filter((entry) => entry.tabId !== tabId && Date.now() - entry.timestamp < 1_800_000);
-    const token = crypto.randomUUID();
-    prompts.push({ tabId, documentToken, recordId: record.id, token, timestamp: Date.now() });
-    await browser.storage.session.set({ [NOTE_PROMPTS]: prompts.slice(-100) });
+        .filter((entry) => Date.now() - entry.timestamp < NOTE_MAX_AGE);
+    const existing = prompts.find((entry) => entry.tabId === tabId
+        && entry.documentToken === documentToken && entry.recordId === record.id);
+    const token = existing?.token ?? crypto.randomUUID();
+    if (!existing) {
+        prompts.push({ tabId, documentToken, recordId: record.id, token, timestamp: Date.now() });
+        await browser.storage.session.set({ [NOTE_PROMPTS]: prompts.slice(-100) });
+    }
     await notify(tabId, { type: 'DOWNLOAD_SAVED', documentToken, noteToken: token, record: toastRecord(record) });
     return token;
 }
@@ -152,6 +163,7 @@ async function recordDownload(item, click, showToast = true) {
     const note = click?.userNote ?? '';
     const record = {
         id: crypto.randomUUID(), downloadId: item.id,
+        state: DOWNLOAD_STATES.includes(item.state) ? item.state : 'in_progress',
         filename: basename(item.filename), url: provenanceUrl(item.url), referrer: provenanceUrl(item.referrer),
         pageUrl: provenanceUrl(context.pageUrl || item.referrer), pageTitle: context.pageTitle || '',
         nearestHeading: context.nearestHeading || '', linkText: context.linkText || '',
@@ -183,7 +195,7 @@ async function smartDownload(raw, tab, note, documentToken) {
     const context = cleanContext(raw);
     const url = new URL(context.href);
     if (!['http:', 'https:', 'ftp:'].includes(url.protocol)) throw new Error('Unsupported download URL');
-    const click = await cacheClick(context, tab?.id, note, documentToken);
+    const click = { context, tabId: tab?.id, userNote: text(note).slice(0, 8000), documentToken };
     const filename = smartFilename(context);
     const downloadId = await browser.downloads.download({ url: url.href, filename, saveAs: false });
     const [item] = await browser.downloads.search({ id: downloadId });
@@ -198,7 +210,7 @@ async function authorizedNote(message, sender) {
     const prompt = prompts.find((entry) => entry.tabId === sender.tab?.id
         && entry.recordId === message.recordId && entry.token === message.noteToken
         && entry.documentToken === message.documentToken
-        && Date.now() - entry.timestamp < 1_800_000);
+        && Date.now() - entry.timestamp < NOTE_MAX_AGE);
     if (!prompt) throw new Error('Note request expired. Open the note editor again.');
     return prompt;
 }
@@ -218,7 +230,12 @@ async function openNoteEditor(recordId) {
     const record = (await readVault()).find((entry) => entry.id === recordId);
     if (!record) throw new Error('No download to annotate yet');
     await browser.storage.session.set({ popup_note_record: { recordId } });
-    await browser.action.openPopup();
+    try {
+        await browser.action.openPopup();
+    } catch (error) {
+        await browser.storage.session.remove('popup_note_record');
+        throw error;
+    }
     return { ok: true };
 }
 
@@ -231,7 +248,7 @@ browser.runtime.onMessage.addListener((message, sender) => {
     return exclusive(async () => {
         if (!/^[\da-f-]{36}$/i.test(text(message.documentToken))) throw new Error('Invalid document identity');
         if (type === 'CAPTURED_CLICK_CONTEXT' || type === 'remember-click') {
-            await cacheClick(senderContext(message.context, sender), sender.tab?.id, '', message.documentToken);
+            await cacheClick(senderContext(message.context, sender), sender.tab.id, message.documentToken);
             return { ok: true };
         }
         if (type === 'SAVE_QUICK_NOTE') return saveNote(message, sender);
@@ -284,23 +301,27 @@ browser.downloads.onChanged.addListener((delta) => {
     exclusive(async () => {
         const [item] = await browser.downloads.search({ id: delta.id });
         if (item && excludedDownload(item)) return;
-        let records = await readVault();
-        let record = records.find((entry) => entry.downloadId === delta.id);
+        const records = await readVault();
+        const record = records.find((entry) => entry.downloadId === delta.id);
+        const state = delta.state?.current;
+        const filename = delta.filename ? basename(delta.filename.current) : null;
         if (!record) {
             if (!item) return;
-            await recordDownload(item, await matchClick(item));
-            records = await readVault();
-            record = records.find((entry) => entry.downloadId === delta.id);
-        }
-        if (delta.filename) {
-            record.filename = basename(delta.filename.current);
+            await recordDownload({
+                ...item, filename: filename ?? item.filename, state: state ?? item.state,
+            }, await matchClick(item));
+        } else {
+            if (filename !== null) record.filename = filename;
+            if (DOWNLOAD_STATES.includes(state)) record.state = state;
             await browser.storage.local.set({ [VAULT_KEY]: records });
-            const key = `download_origin:${delta.id}`;
+        }
+        const key = `download_origin:${delta.id}`;
+        if (record && filename !== null) {
             const stored = await browser.storage.session.get(key);
             await promptNote(stored[key], record);
         }
-        if (['complete', 'interrupted'].includes(delta.state?.current)) {
-            await browser.storage.session.remove(`download_origin:${delta.id}`);
+        if (state === 'complete' || state === 'interrupted') {
+            await browser.storage.session.remove(key);
         }
     }).catch(report);
 });
@@ -311,14 +332,15 @@ browser.commands.onCommand.addListener((command) => {
         const tab = await activeTab();
         if (tab?.incognito) return;
         try {
-            const response = await browser.tabs.sendMessage(tab.id, { type: 'QUICK_NOTE_REQUEST' });
+            const response = Number.isInteger(tab?.id)
+                ? await browser.tabs.sendMessage(tab.id, { type: 'QUICK_NOTE_REQUEST' }) : null;
             if (response?.handled) return;
         } catch {
             // Restricted pages have no content script; the popup remains available.
         }
         await exclusive(async () => {
-            const record = (await readVault()).at(-1);
-            if (record) await openNoteEditor(record.id);
+            await browser.storage.session.remove('popup_note_record');
+            await browser.action.openPopup();
         });
     })().catch(report);
 });

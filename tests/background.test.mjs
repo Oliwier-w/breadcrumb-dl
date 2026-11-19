@@ -89,17 +89,27 @@ test('background event-page workflows survive reloads and overlapping events', a
     assert.equal(session.data.click_contexts[0].key, '7:https://cdn.example.com/report.pdf');
     await load();
 
-    events.created.emit({ id: 1, url: 'https://cdn.example.com/report.pdf', filename: '' });
-    events.created.emit({ id: 2, url: 'https://redirect.example.net/file', referrer: context.pageUrl });
+    events.created.emit({ id: 1, url: 'https://cdn.example.com/report.pdf', referrer: context.pageUrl, filename: '' });
+    events.created.emit({ id: 2, tabId: 7, url: 'https://redirect.example.net/file', referrer: context.pageUrl });
     await flush();
     assert.equal(local.data.vault_records.length, 2);
     assert.equal(local.data.vault_records[0].containerText, 'Financial results');
     assert.equal(local.data.vault_records[1].nearestHeading, 'Annual report');
     assert.match(local.data.vault_records[0].id, /^[\da-f-]{36}$/);
+    const originalPrompt = sent.find(({ message }) => message.record.id === local.data.vault_records[0].id).message;
     events.changed.emit({ id: 1, filename: { current: 'C:\\Downloads\\final.pdf' } });
     await flush();
     assert.equal(local.data.vault_records[0].filename, 'final.pdf');
     assert.equal(sent.at(-1).tabId, 7);
+    assert.equal(sent.at(-1).message.noteToken, originalPrompt.noteToken);
+    events.changed.emit({ id: 1, state: { current: 'interrupted' } });
+    await flush();
+    assert.equal(local.data.vault_records[0].state, 'interrupted');
+    assert.equal(session.data['download_origin:1'], undefined);
+    events.changed.emit({ id: 1, filename: { current: 'renamed.pdf' } });
+    await flush();
+    assert.equal(local.data.vault_records[0].filename, 'renamed.pdf');
+    assert.equal(local.data.vault_records[0].state, 'interrupted');
 
     const result = await message('TRIGGER_SMART_DOWNLOAD', { context, note: 'Read #Finance' });
     await flush();
@@ -117,7 +127,7 @@ test('background event-page workflows survive reloads and overlapping events', a
     await Promise.all(events.command.emit('quick-note'));
     await flush();
     assert.equal(popupCount, 1);
-    assert.equal(session.data.popup_note_record.recordId, result.record.id);
+    assert.equal(session.data.popup_note_record, undefined);
     assert.equal(sent.at(-1).message.type, 'QUICK_NOTE_REQUEST');
     const savedMessage = sent.filter((entry) => entry.message.type === 'DOWNLOAD_SAVED').at(-1).message;
     assert.deepEqual(Object.keys(savedMessage.record).sort(), ['filename', 'id']);
@@ -141,6 +151,8 @@ test('background event-page workflows survive reloads and overlapping events', a
     });
     assert.equal(editor.ok, true);
     assert.equal(popupCount, 2);
+    await Promise.all(events.command.emit('quick-note'));
+    assert.equal(session.data.popup_note_record, undefined);
 
     events.menu.emit({ menuItemId: 'breadcrumb-smart-download', linkUrl: context.href,
         pageUrl: context.pageUrl }, { id: 7, title: 'Example' });
@@ -171,6 +183,14 @@ test('background event-page workflows survive reloads and overlapping events', a
     await flush();
     assert.equal(local.data.vault_records.at(-1).pageTitle, '');
     assert.equal(sent.length, beforeCrossTab);
+
+    await message('CAPTURED_CLICK_CONTEXT', { context }, 8);
+    events.created.emit({ id: 8, url: context.href, referrer: context.pageUrl });
+    events.created.emit({ id: 9, url: context.href });
+    await flush();
+    for (const id of [8, 9]) {
+        assert.equal(local.data.vault_records.find((record) => record.downloadId === id).pageTitle, '');
+    }
 
     const secretUrl = 'https://user:password@example.com/file?token=private-token&item=42#secret-fragment';
     events.created.emit({ id: 7, url: secretUrl, referrer: secretUrl });

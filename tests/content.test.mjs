@@ -136,6 +136,17 @@ test('synthetic page events are rejected before DOM inspection or messaging', ()
     assert.equal(h.roots.length, 0);
 });
 
+test('smart download gesture works immediately after an ordinary click', async () => {
+    const h = harness();
+    h.click();
+    let prevented = false;
+    h.click({ altKey: true, shiftKey: true, preventDefault: () => { prevented = true; } });
+    await h.flush();
+    assert.equal(prevented, true);
+    assert.equal(h.roots.length, 1);
+    assert.deepEqual(h.messages.map((message) => message.type), ['CAPTURED_CLICK_CONTEXT', 'preview']);
+});
+
 test('closed confirmation toast rejects synthetic buttons and keyboard, and opens popup after download', async () => {
     const h = harness();
     h.click({ altKey: true, shiftKey: true });
