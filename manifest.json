@@ -12,11 +12,11 @@
       }
     }
   },
-  "permissions": ["downloads", "storage", "menus", "activeTab"],
+  "permissions": ["downloads", "storage", "menus"],
   "host_permissions": ["<all_urls>"],
   "incognito": "not_allowed",
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; base-uri 'none'"
+    "extension_pages": "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; object-src 'none'; base-uri 'none'"
   },
   "background": {
     "scripts": ["src/background/index.js"],
