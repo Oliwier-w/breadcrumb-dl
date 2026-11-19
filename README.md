@@ -18,12 +18,15 @@ BreadcrumbDL operates locally using a clean background and content script archit
 BreadcrumbDL requests only the absolute minimum permissions required for local archival:
 - `downloads`: To track download events and capture file metadata.
 - `storage`: To persist local download provenance history safely in your browser storage.
-- `activeTab` / `<all_urls>`: To read the source page context (title, heading, link text) strictly at the moment a download is triggered.
+- `menus`: To offer **Download with Breadcrumb Name** in the link context menu.
+- `<all_urls>`: To let the content script capture context around link clicks without opening the extension first.
 
 ## Development & Testing
 
-Built with standard ES modules for Firefox WebExtension (Manifest V3).
+The extension targets Firefox 142 or later and has no runtime dependencies.
 
-1. Install dependencies:
-   ```bash
-   npm install
+```bash
+npm test
+npx web-ext lint
+npx web-ext run
+```
